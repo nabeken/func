@@ -74,17 +74,21 @@ class BaseSSLServer(BaseServer):
 
         BaseServer.__init__(self, server_address, req_handler)
 
-        sock = socket.socket(self.address_family, self.socket_type)
+        port = server_address[1]
+        info = socket.getaddrinfo(None, port, socket.AF_UNSPEC, self.socket_type, 0, socket.AI_PASSIVE)
+        sock = socket.socket(*info[0][:3])
         con = SSL.Connection(self.ssl_ctx, sock)
         self.socket = SSLConnection.SSLConnection(con)
+
         if sys.version_info[:3] >= (2, 3, 0):
             self.socket.settimeout(self._timeout)
-        self.server_bind()
-        self.server_activate()
 
-        host, port = self.socket.getsockname()[:2]
+        host = self.socket.getsockname()[0]
         self.server_name = socket.getfqdn(host)
         self.server_port = port
+
+        self.server_bind()
+        self.server_activate()
 
 
 class HTTPSConnection(httplib.HTTPConnection):
@@ -98,13 +102,27 @@ class HTTPSConnection(httplib.HTTPConnection):
         self._timeout = timeout
 
     def connect(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        con = SSL.Connection(self.ssl_ctx, sock)
-        self.sock = SSLConnection.SSLConnection(con)
-        if sys.version_info[:3] >= (2, 3, 0):
-            self.sock.settimeout(self._timeout)
-        self.sock.connect((self.host, self.port))
+        for res in socket.getaddrinfo(self.host, self.port, socket.AF_UNSPEC, socket.SOCK_STREAM):
+            af, socktype, proto, canonname, sa = res
 
+            try:
+                sock = socket.socket(af, socktype, proto)
+                con = SSL.Connection(self.ssl_ctx, sock)
+                self.sock = SSLConnection.SSLConnection(con)
+
+                if sys.version_info[:3] >= (2, 3, 0):
+                    self.sock.settimeout(self._timeout)
+
+                self.sock.connect(sa)
+            except socket.error, msg:
+                if self.sock:
+                    self.sock.close()
+                sock = None
+                continue
+            break
+
+        if not self.sock:
+            raise socket.error, msg
 
 class HTTPS(httplib.HTTP):
     """Compatibility with 1.5 httplib interface
